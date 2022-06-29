@@ -1,6 +1,21 @@
-const { delayFor } = require('../Util/Util.js');
-class Queue {
-    constructor(options) {
+import Util from '../Util/Util';
+
+interface Item {
+    // eslint-disable-next-line no-unused-vars
+    run(...a: unknown[]): Promise<unknown>;
+    time? : number;
+    args: number[],
+    timeout: number,
+}
+
+export default class Queue {
+    options: { auto?: boolean; timeout?: number; };
+    queue: Item[];
+    paused: boolean;
+    constructor(options: {
+        auto?: boolean;
+        timeout?: number;
+    } = {}) {
         this.options = options;
         this.queue = [];
         this.paused = false;
@@ -10,9 +25,9 @@ class Queue {
      * Starts the queue and run's the item functions
      * @returns {Promise<Queue>}
      */
-    async start() {
+    async start(): Promise<Queue|void> {
         if (!this.options.auto) {
-            return new Promise(resolve => {
+            return new Promise<void>(resolve => {
                 const interval = setInterval(() => {
                     if (this.queue.length === 0) {
                         clearInterval(interval);
@@ -27,7 +42,7 @@ class Queue {
             if(!this.queue[0]) continue;
             const timeout = this.queue[0].timeout;
             await this.next();
-            await delayFor(timeout);
+            await Util.delayFor(timeout);
         }
         return this;
     }
@@ -66,7 +81,7 @@ class Queue {
      * @param item
      * @returns {Queue}
      */
-    add(item) {
+    add(item: Item) {
         this.queue.push({
             run: item.run,
             args: item.args,
@@ -76,4 +91,3 @@ class Queue {
         return this;
     }
 }
-module.exports = Queue;

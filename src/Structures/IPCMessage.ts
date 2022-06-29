@@ -1,7 +1,21 @@
-const {messageType} = require('../Util/Constants.js');
-const Util = require('../Util/Util.js');
+import ClusterClient from '../Core/ClusterClient.js';
+import ClusterManager from '../Core/ClusterManager.js';
+import { messageType } from '../Util/Constants.js';
+import Util from '../Util/Util.js';
+
+export interface Message {
+    _sCustom?: boolean;
+    nonce?: string;
+    _type?: messageType;
+}
+
 class BaseMessage {
-    constructor(message = {}) {
+    nonce: string;
+    private _raw: Message;
+    private _type: messageType;
+    private _sCustom: boolean;
+
+    constructor(message: Message = {}) {
         /**
          * Creates a Message ID for identifying it for further Usage such as on replies
          * @type {string}
@@ -14,14 +28,17 @@ class BaseMessage {
          * @type {string}
          */
         this._raw = this.destructMessage(message);
+
     }
 
     /**
      * Destructs the Message Object and initializes it on the Constructor
      * @param {object} message The Message, which was passed in the Constructor
      */
-    destructMessage(message) {
-        for (let [key, value] of Object.entries(message)) {
+    destructMessage(message: Message) {
+        for (const [key, value] of Object.entries(message)) {
+            // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+            // @ts-ignore
             this[key] = value;
         }
         this.nonce = message.nonce;
@@ -39,7 +56,9 @@ class BaseMessage {
 }
 
 class IPCMessage extends BaseMessage {
-    constructor(instance, message) {
+    instance: ClusterManager|ClusterClient;
+    _sRequest: any;
+    constructor(instance: ClusterManager|ClusterClient, message: Message) {
         super(message);
 
         /**
@@ -60,7 +79,7 @@ class IPCMessage extends BaseMessage {
      * @param {BaseMessage} message Message to send to the cluster/client
      * @returns {Promise<*>}
      */
-    async send(message = {}) {
+    async send(message: BaseMessage = {}): Promise<unknown> {
         if (typeof message !== 'object') throw new TypeError('The Message has to be a object');
         message._type = messageType.CUSTOM_MESSAGE;
         message = new BaseMessage(message);
@@ -72,7 +91,7 @@ class IPCMessage extends BaseMessage {
      * @param {BaseMessage} message Request to send to the cluster/client
      * @returns {Promise<reply>}
      */
-    async request(message = {}) {
+    async request(message: BaseMessage): Promise<reply> {
         if (typeof message !== 'object') throw new TypeError('The Message has to be a object');
         message.nonce = this.nonce;
         message._type = messageType.CUSTOM_REQUEST;
@@ -87,7 +106,7 @@ class IPCMessage extends BaseMessage {
      * @param {BaseMessage} message Reply to send to the cluster/client
      * @returns {Promise<reply>}
      */
-    async reply(message = {}) {
+    async reply(message: BaseMessage): Promise<reply> {
         if (typeof message !== 'object') throw new TypeError('The Message has to be a object');
         message.nonce = this.raw.nonce;
         message._type = messageType.CUSTOM_REPLY;
@@ -98,4 +117,4 @@ class IPCMessage extends BaseMessage {
         return this.instance.send(message.toJSON());
     }
 }
-module.exports = { IPCMessage, BaseMessage };
+export { IPCMessage, BaseMessage };

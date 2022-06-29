@@ -1,7 +1,32 @@
-const childProcess = require('child_process');
+import childProcess, { StdioOptions, Serializable, SerializationType } from 'child_process';
+import ClusterClient from '../Core/ClusterClient';
+
+interface ChildOptions {
+    args?: ReadonlyArray<string>;
+    execPath?: string | undefined;
+    execArgv?: string[] | undefined;
+    silent?: boolean | undefined;
+    stdio?: StdioOptions | undefined;
+    detached?: boolean | undefined;
+    windowsVerbatimArguments?: boolean | undefined;
+    uid?: number;
+    gid?: number;
+    env?: NodeJS.ProcessEnv;
+    serialization?: SerializationType;
+    signal?: AbortSignal;
+    killSignal?: number | NodeJS.Signals;
+    timeout?: number;
+
+    clusterData?: NodeJS.ProcessEnv;
+    cwd?: string;
+}
 
 class Child {
-    constructor(file, options = {}) {
+    file: string;
+    processOptions: ChildOptions;
+    process: childProcess.ChildProcess;
+
+    constructor(file: string, options: ChildOptions = {}) {
         this.file = file;
         this.process = null;
 
@@ -45,7 +70,7 @@ class Child {
         return this.process?.kill();
     }
 
-    send(message) {
+    send(message: Serializable) {
         return new Promise((resolve, reject) => {
             this.process?.send(message, err => {
                 if (err) reject(err);
@@ -56,12 +81,13 @@ class Child {
 }
 
 class ChildClient {
-    constructor() {
-        this.ipc = process;
+    ipc: ClusterClient;
+    constructor(clusterClient: ClusterClient) {
+        this.ipc = clusterClient;
     }
-    send(message) {
-        return new Promise((resolve, reject) => {
-            process.send(message, err => {
+    send(message: Serializable) {
+        return new Promise<void>((resolve, reject) => {
+            process.send(message, (err: Error) => {
                 if (err) reject(err);
                 else resolve();
             });
@@ -73,4 +99,4 @@ class ChildClient {
     }
 }
 
-module.exports = { Child, ChildClient };
+export { Child, ChildClient };

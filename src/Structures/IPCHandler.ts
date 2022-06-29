@@ -1,14 +1,34 @@
 // @ts-check
-const Util = require('../Util/Util.js');
-const {messageType} = require('../Util/Constants.js');
+import Util from '../Util/Util.js';
+import { messageType } from '../Util/Constants.js';
+import ClusterManager from '../Core/ClusterManager.js';
+import Cluster from '../Core/Cluster.js';
+import { Child } from './Child.js';
+import { Worker } from '../Structures/Worker';
+import ClusterClient from '../Core/ClusterClient.js';
+
+export interface IPCMessage { 
+    _type: messageType;
+    // eslint-disable-next-line @typescript-eslint/ban-types
+    _eval: string | Function;
+    options: object;
+    nonce: string;
+    maintenance: string;
+    date: number;
+    _sCustom?: boolean;
+}
+
 class ClusterHandler {
-  constructor(manager, cluster, ipc) {
+  manager: ClusterManager;
+  cluster: Cluster;
+  ipc: Child | Worker;
+  constructor(manager: ClusterManager, cluster: Cluster, ipc: Child | Worker) {
     this.manager = manager;
     this.cluster = cluster;
     this.ipc = ipc;
   }
 
-  handleMessage(message) {
+  handleMessage(message: IPCMessage) {
      if(message._type === messageType.CLIENT_READY) {
         this.cluster.ready = true;
         /**
@@ -30,7 +50,7 @@ class ClusterHandler {
          return;
      }
      if(message._type === messageType.CLIENT_MANAGER_EVAL_REQUEST){
-        this.cluster.manager.evalOnManager(message._eval, message.options)
+        this.cluster.manager.evalOnManager(message._eval)
         .then(result => {
             if(result._error) this.ipc.send({nonce: message.nonce, _type: messageType.CLIENT_MANAGER_EVAL_RESPONSE, _error: Util.makePlainError(result._error)});
             return this.ipc.send({nonce: message.nonce, _type: messageType.CLIENT_MANAGER_EVAL_RESPONSE, _result: result._result});
@@ -74,12 +94,14 @@ class ClusterHandler {
 }
 
 class ClusterClientHandler {
-    constructor(client, ipc) {
+    client: ClusterClient;
+    ipc: any;
+    constructor(client: ClusterClient, ipc: any) {
       this.client = client;
       this.ipc = ipc;
     }
   
-    async handleMessage(message) {
+    async handleMessage(message): Promise<null | true> {
         if(message._type === messageType.CLIENT_EVAL_REQUEST){
             try {
                 this.client._respond('eval', { 
@@ -88,10 +110,10 @@ class ClusterClientHandler {
                     _type: messageType.CLIENT_EVAL_RESPONSE , 
                     nonce: message.nonce
                 });
-            } catch (err) {
+            } catch (err: unknown) {
                 this.client._respond('eval', { 
                     _eval: message._eval, 
-                    _error: Util.makePlainError(err), 
+                    _error: Util.makePlainError(<Error>err), 
                     _type: messageType.CLIENT_EVAL_RESPONSE ,
                     nonce: message.nonce
                 });
@@ -126,4 +148,4 @@ class ClusterClientHandler {
         return true;
     }
 }
-module.exports = { ClusterHandler, ClusterClientHandler };
+export { ClusterHandler, ClusterClientHandler };

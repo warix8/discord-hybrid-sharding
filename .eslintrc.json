@@ -7,10 +7,23 @@
         "es2021": true,
         "node": true
     },
-    "plugins": ["prettier", "jsdoc"],
-    "extends": ["eslint:recommended", "plugin:prettier/recommended"],
+    "parser": "@typescript-eslint/parser",
+    "plugins": [
+        "prettier",
+        "jsdoc",
+        "@typescript-eslint"
+    ],
+    "extends": [
+        "eslint:recommended",
+        "plugin:prettier/recommended",
+        "plugin:@typescript-eslint/eslint-recommended",
+        "plugin:@typescript-eslint/recommended"
+    ],
     "rules": {
-        "jsdoc/newline-after-description": ["warn", "never"],
+        "jsdoc/newline-after-description": [
+            "warn",
+            "never"
+        ],
         "jsdoc/no-undefined-types": "warn",
         "no-unused-vars": [
             "error",

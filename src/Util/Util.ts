@@ -1,8 +1,15 @@
-const fetch = require('node-fetch');
-const { DefaultOptions, Endpoints } = require('./Constants.js');
+/* eslint-disable @typescript-eslint/ban-ts-comment */
+import fetch from 'node-fetch';
+import { DefaultOptions, Endpoints } from './Constants.js';
 
-const has = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
-class Util {
+export interface makeErrorOpts {
+    name: string;
+    message: string;
+    stack?: string;
+}
+
+const has = (o: unknown, k: PropertyKey) => Object.prototype.hasOwnProperty.call(o, k);
+export default class Util {
     //Discord.js v12 Code | Credits: https://github.com/discordjs/discord.js/blob/v12/src/util/Util.js#L287
     /**
      * Sets default properties on an object that aren't already specified.
@@ -11,12 +18,16 @@ class Util {
      * @returns {object}
      * @private
      */
-    static mergeDefault(def, given) {
+    static mergeDefault(def: object, given: object): object {
         if (!given) return def;
         for (const key in def) {
+            // @ts-ignore
             if (!has(given, key) || given[key] === undefined) {
+                // @ts-ignore
                 given[key] = def[key];
+                // @ts-ignore
             } else if (given[key] === Object(given[key])) {
+                // @ts-ignore
                 given[key] = this.mergeDefault(def[key], given[key]);
             }
         }
@@ -30,14 +41,14 @@ class Util {
      * @returns {object}
      * @private
      */
-    static makePlainError(err) {
+    static makePlainError(err: Error): makeErrorOpts {
         return {
             name: err.name,
             message: err.message,
             stack: err.stack,
         };
     }
-
+    
     //Discord.js v12 Code | Credits: https://github.com/discordjs/discord.js/blob/v12/src/util/Util.js#L333
     /**
      * Makes an Error from a plain info object.
@@ -48,7 +59,7 @@ class Util {
      * @returns {Error}
      * @private
      */
-    static makeError(obj) {
+    static makeError(obj: makeErrorOpts): Error {
         const err = new Error(obj.message);
         err.name = obj.name;
         err.stack = obj.stack;
@@ -61,7 +72,7 @@ class Util {
      * @returns {Promise<void>}
      * @private
      */
-    static delayFor(ms) {
+    static delayFor(ms: number): Promise<void> {
         return new Promise(resolve => {
             setTimeout(resolve, ms);
         });
@@ -74,9 +85,9 @@ class Util {
      * @param {number} totalShards The Amount of totalShards on the current instance
      * @returns {number} The shard Id
      */
-    static shardIdForGuildId(guildId, totalShards = 1) {
+    static shardIdForGuildId(guildId: string, totalShards = 1): number {
         const shard = Number(BigInt(guildId) >> 22n) % totalShards;
-        if (shard < 0) throw new Error('SHARD_MISCALCULATION_SHARDID_SMALLER_THAN_0', shard, guildId, totalShards);
+        if (shard < 0) throw new Error('SHARD_MISCALCULATION_SHARDID_SMALLER_THAN_0');
         return shard;
     }
 
@@ -87,7 +98,7 @@ class Util {
      * @param {number} [guildsPerShard=1000] Number of guilds per shard
      * @returns {Promise<number>} The recommended number of shards
      */
-    static fetchRecommendedShards(token, guildsPerShard = 1000) {
+    static fetchRecommendedShards(token: string, guildsPerShard = 1000): Promise<number> {
         if (!token) throw new Error('DISCORD_TOKEN_MISSING');
         return fetch(`${DefaultOptions.http.api}/v${DefaultOptions.http.version}${Endpoints.botGateway}`, {
             method: 'GET',
@@ -105,4 +116,3 @@ class Util {
         return Date.now().toString(36) + Math.random().toString(36);
     }
 }
-module.exports = Util;

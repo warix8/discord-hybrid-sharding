@@ -1,10 +1,17 @@
+/* eslint-disable no-unused-vars */
 
-const Util = require('../Util/Util.js');
-class PromiseHandler{
+import Util from '../Util/Util.js';
+export default class PromiseHandler{
+    nonce: Map<string, {
+        timeout?: number;
+        resolve(r: unknown): void;
+        reject(e: Error): void;
+        results?: unknown[];
+        options: { limit?: number, timeout?: number}}>;
     constructor(){
         this.nonce = new Map();
     }
-    resolve(message){
+    resolve(message: { nonce: string; _error?: Error; _result?: unknown; stack?: string; }){
         const promise = this.nonce.get(message.nonce);
         if(promise){
             if(promise.timeout) clearTimeout(promise.timeout);
@@ -20,7 +27,7 @@ class PromiseHandler{
             }
         }
     }
-    insertResult({nonce, _result, _error}){
+    insertResult({nonce, _result, _error}: {nonce: string; _result: unknown; _error: Error}){
         const promise = this.nonce.get(nonce);
         if(promise){
             if(!promise.results) promise.results = [];
@@ -33,13 +40,12 @@ class PromiseHandler{
         }
     }
 
-    async create(message, options = {}){
+    async create(message: { options: { timeout?: number; }; nonce: string; stack: string; }, options: { timeout?: number} = {}){
         if(Object.keys(options).length === 0 && message.options) options = message.options;
         if(!message.nonce) message.nonce = Util.generateNonce();
         const promise = await new Promise((resolve, reject) => {
-            let timeout = undefined;
             if(options.timeout){
-                timeout = setTimeout(() => {
+                setTimeout(() => {
                     this.nonce.delete(message.nonce);
                     const error = new Error('Promise timed out');
                     error.stack = message.stack || error.stack;
@@ -51,4 +57,3 @@ class PromiseHandler{
         return promise;
     }
 }
-module.exports = PromiseHandler;

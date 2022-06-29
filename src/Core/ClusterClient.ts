@@ -1,20 +1,55 @@
+/* eslint-disable @typescript-eslint/ban-ts-comment */
+/* eslint-disable @typescript-eslint/ban-types */
 // @ts-check
-const { IPCMessage, BaseMessage } = require('../Structures/IPCMessage.js');
-const Util = require('../Util/Util.js');
-const { Events, messageType } = require('../Util/Constants.js');
+import { IPCMessage, BaseMessage, Message } from '../Structures/IPCMessage.js';
+import Util from '../Util/Util.js';
+import { Events, messageType } from '../Util/Constants.js';
+import { Serializable, workerData } from 'worker_threads';
 
-const { WorkerClient } = require('../Structures/Worker.js');
-const { ChildClient } = require('../Structures/Child.js');
-const { ClusterClientHandler } = require('../Structures/IPCHandler.js');
-const PromiseHandler = require('../Structures/PromiseHandler.js');
+import { WorkerClient } from '../Structures/Worker.js';
+import { ChildClient } from '../Structures/Child.js';
+import { ClusterClientHandler } from '../Structures/IPCHandler.js';
+import PromiseHandler from '../Structures/PromiseHandler.js';
 
-const EventEmitter = require('events');
+import EventEmitter from 'events';
+import { Client } from 'discord.js';
+import { ClusterManagerMode } from './ClusterManager.js';
+
+interface infoData {
+    LAST_SHARD_ID?: number;
+    FIRST_SHARD_ID?: number;
+    SHARD_LIST: number[],
+    TOTAL_SHARDS: number,
+    CLUSTER_COUNT: number,
+    CLUSTER: number,
+    CLUSTER_MANAGER_MODE: ClusterManagerMode,
+    MAINTENANCE: boolean | "undefined",
+    CLUSTER_QUEUE_MODE: string,
+}
+
+export interface BroadCastEvalOptions {
+    _type?: messageType;
+    context?: object;
+    cluster?: number;
+    shard?: number;
+    guildId?: string;
+    timeout?: number;
+}
+
 ///communicates between the master workers and the process
-class ClusterClient extends EventEmitter {
+export default class ClusterClient extends EventEmitter {
+    client: Client<boolean>;
+    mode: ClusterManagerMode;
+    queue: { mode: string };
+    maintenance: boolean;
+    ready: boolean;
+    process: WorkerClient | ChildClient;
+    messageHandler: ClusterClientHandler;
+    promise: PromiseHandler;
     /**
      * @param {Client} client Client of the current cluster
      */
-    constructor(client) {
+    constructor(client: Client) {
         super();
         /**
          * Client for the Cluster
@@ -27,7 +62,7 @@ class ClusterClient extends EventEmitter {
          * @type {ClusterManagerMode}
          */
         this.mode = this.info.CLUSTER_MANAGER_MODE;
-        let mode = this.mode;
+        const mode = this.mode;
 
         /**
          * If the Cluster is spawned automatically or with a own controller
@@ -41,8 +76,12 @@ class ClusterClient extends EventEmitter {
          * If the Cluster is under maintenance
          * @type {String}
          */
-        this.maintenance = this.info.MAINTENANCE;
-        if(this.maintenance === 'undefined') this.maintenance = false;
+        if(this.info.MAINTENANCE === 'undefined') {
+            this.maintenance = false;
+        } else {
+            this.maintenance = this.info.MAINTENANCE;
+        }
+
         if(!this.maintenance) {
             // Wait 100ms so listener can be added
            setTimeout(() => this.triggerClusterReady() , 100);
@@ -53,7 +92,7 @@ class ClusterClient extends EventEmitter {
         this.process = null;
 
         if (mode === 'process') this.process = new ChildClient(this);
-        else if (mode === 'worker') this.process = new WorkerClient(this);
+        else if (mode === 'worker') this.process = new WorkerClient();
 
         this.messageHandler = new ClusterClientHandler(this, this.process);
 
@@ -103,7 +142,7 @@ class ClusterClient extends EventEmitter {
      * @returns {Promise<void>}
      * @fires Cluster#message
      */
-    send(message) {
+    send(message: Serializable) {
         if (typeof message === 'object') message = new BaseMessage(message).toJSON();
         return this.process.send(message);
     }
@@ -118,7 +157,7 @@ class ClusterClient extends EventEmitter {
      *   .catch(console.error);
      * @see {@link ClusterManager#fetchClientValues}
      */
-    fetchClientValues(prop, cluster) {
+    fetchClientValues(prop: string, cluster: number) {
         return this.broadcastEval(`this.${prop}`, {cluster});
     }
 
@@ -135,12 +174,12 @@ class ClusterClient extends EventEmitter {
      *   .catch(console.error);
      * @see {@link ClusterManager#evalOnManager}
      */
-    async evalOnManager(script, options = {}) {
+    async evalOnManager(script: string | Function, options: BroadCastEvalOptions = {}) {
         options._type = messageType.CLIENT_MANAGER_EVAL_REQUEST
         return await this.broadcastEval(script, options);
     }
 
-    async evalOnCluster(script, options = {}) {
+    async evalOnCluster(script: string | Function, options = {}) {
         return await this.broadcastEval(script, options);
     }
 
@@ -160,7 +199,7 @@ class ClusterClient extends EventEmitter {
      *   .catch(console.error);
      * @see {@link ClusterManager#broadcastEval}
      */
-    async broadcastEval(script, options = {}) {
+    async broadcastEval(script: string | Function, options: BroadCastEvalOptions = {}) {
         if (!script || (typeof script !== 'string' && typeof script !== 'function'))
           throw new TypeError(
             'Script for BroadcastEvaling has not been provided or must be a valid String/Function!',
@@ -170,6 +209,7 @@ class ClusterClient extends EventEmitter {
         const message = {nonce, _eval: script, options, _type: options._type || messageType.CLIENT_BROADCAST_REQUEST};
         await this.send(message);
 
+        // @ts-ignore
         return await this.promise.create(message);
     }
     /**
@@ -183,10 +223,14 @@ class ClusterClient extends EventEmitter {
      * @see {@link IPCMessage#reply}
      */
     request(message = {}) {
+        // @ts-ignore
         message._sRequest = true;
+        // @ts-ignore
         message._sReply = false;
+        // @ts-ignore
         message._type = messageType.CUSTOM_REQUEST;
         this.send(message);
+        // @ts-ignore
         return this.promise.create(message);
     }
 
@@ -205,7 +249,7 @@ class ClusterClient extends EventEmitter {
      * @param {*} message Message received
      * @private
      */
-    async _handleMessage(message) {
+    async _handleMessage(message: Message) {
         if (!message) return;
         const emit = await this.messageHandler.handleMessage(message);
         if(!emit) return;
@@ -220,13 +264,17 @@ class ClusterClient extends EventEmitter {
         this.emit('message', emitMessage);
     }
 
-    async _eval(script) {
+    async _eval(script: string) {
+        // @ts-ignore
         if (this.client._eval) {
+            // @ts-ignore
             return await this.client._eval(script);
         }
+        // @ts-ignore
         this.client._eval = function (_) {
             return eval(_);
         }.bind(this.client);
+        // @ts-ignore
         return await this.client._eval(script);
     }
 
@@ -236,9 +284,9 @@ class ClusterClient extends EventEmitter {
      * @param {*} message Message to send, which can be a Object or a String
      * @private
      */
-    _respond(type, message) {
+    _respond(type: unknown, message: Serializable) {
         this.send(message).catch(err => {
-            let error = { err };
+            const error = <Error>err;
 
             error.message = `Error when sending ${type} response to master process: ${err.message}`;
             /**
@@ -267,7 +315,7 @@ class ClusterClient extends EventEmitter {
      * @param {Boolean} all Whether to target it on all clusters or just the current one.
      * @returns {String} The maintenance status of the cluster.
      */
-    triggerMaintenance(maintenance, all = false) {
+    triggerMaintenance(maintenance: boolean, all = false) {
         let _type = messageType.CLIENT_MAINTENANCE;
         if(all) _type = messageType.CLIENT_MAINTENANCE_ALL;
         this.process.send({ _type, maintenance });
@@ -290,14 +338,14 @@ class ClusterClient extends EventEmitter {
      * @returns {Object}
      */
     static getInfo() {
-        let clusterMode = process.env.CLUSTER_MANAGER_MODE;
+        const clusterMode = process.env.CLUSTER_MANAGER_MODE;
         if (!clusterMode) return;
         if (clusterMode !== 'worker' && clusterMode !== 'process')
             throw new Error('NO CHILD/MASTER EXISTS OR SUPPLIED CLUSTER_MANAGER_MODE IS INCORRECT');
-        let data;
+        let data: infoData;
         if (clusterMode === 'process') {
-            const shardList = [];
-            let parseShardList = process.env.SHARD_LIST.split(',');
+            const shardList: number[] = [];
+            const parseShardList = process.env.SHARD_LIST.split(',');
             parseShardList.forEach(c => shardList.push(Number(c)));
             data = {
                 SHARD_LIST: shardList,
@@ -305,11 +353,11 @@ class ClusterClient extends EventEmitter {
                 CLUSTER_COUNT: Number(process.env.CLUSTER_COUNT),
                 CLUSTER: Number(process.env.CLUSTER),
                 CLUSTER_MANAGER_MODE: clusterMode,
-                MAINTENANCE: process.env.MAINTENANCE,
+                MAINTENANCE: Boolean(process.env.MAINTENANCE),
                 CLUSTER_QUEUE_MODE: process.env.CLUSTER_QUEUE_MODE,
             };
         } else {
-            data = require('worker_threads').workerData;
+            data = workerData;
         }
 
         data.FIRST_SHARD_ID = data.SHARD_LIST[0];
@@ -318,4 +366,3 @@ class ClusterClient extends EventEmitter {
         return data;
     }
 }
-module.exports = ClusterClient;

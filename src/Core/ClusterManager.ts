@@ -1,19 +1,69 @@
+/* eslint-disable @typescript-eslint/ban-ts-comment */
+/* eslint-disable @typescript-eslint/ban-types */
 // @ts-check
-const EventEmitter = require('events');
+import EventEmitter from 'events';
 
-const fs = require('fs');
-const path = require('path');
-const os = require('os');
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
 
-const Util = require('../Util/Util.js');
+import Util from '../Util/Util.js';
 
-const Queue = require('../Structures/Queue.js');
+import Queue from '../Structures/Queue';
 
-const Cluster = require('./Cluster.js');
+import Cluster from './Cluster';
 
-const PromiseHandler = require('../Structures/PromiseHandler.js');
+import PromiseHandler from '../Structures/PromiseHandler.js';
+import { BroadCastEvalOptions } from './ClusterClient.js';
 
-class ClusterManager extends EventEmitter {
+export type ClusterManagerMode = 'process' | 'worker';
+
+interface ClusterManagerOptions {
+    clusterData?: object;
+    clusterOptions?: object;
+    shardArgs?: string[];
+    clusterList?: number[];
+    totalShards?: number | "auto";
+    totalClusters?: number | "auto";
+    shardsPerClusters?: number;
+    shardsArgs?: string[];
+    execArgv?: string[]
+    respawn?: boolean;
+    mode?: ClusterManagerMode;
+    shardList?: number[] | 'auto';
+    token?: string;
+    restarts?: {
+        max: number;
+        interval: number;
+        current: number;
+    };
+    queue?: {
+        auto?: boolean;
+        timeout?: number;
+    };
+    keepAlive?: boolean;
+}
+
+export default class ClusterManager extends EventEmitter {
+    respawn: boolean;
+    restarts: { max: number; interval: number; current: number };
+    clusterData: object;
+    clusterOptions: object;
+    file: string;
+    totalShards: "auto" | number;
+    totalClusters: "auto" | number;
+    shardsPerClusters: number;
+    mode: string;
+    shardArgs: string[];
+    execArgv: string[];
+    shardList: number[] | 'auto';
+    token: string;
+    clusters: Map<number, Cluster>;
+    shardClusterList: number[][];
+    clusterList: number[];
+    queue: Queue;
+    promise: PromiseHandler;
+    heartbeat: any;
     /**
      * @param {string} file Path to your bot file
      * @param {object} [options] Options for the cluster manager
@@ -33,8 +83,9 @@ class ClusterManager extends EventEmitter {
      * @param {number} [options.restarts.max] Maximum amount of restarts a cluster can have in the interval
      * @param {object} [options.queue] Control the Spawn Queue
      * @param {boolean} [options.queue.auto=true] Whether the spawn queue be automatically managed
+     * @deprecated @param {boolean} [options.keepAlive=false] Whether the cluster manager should keep the process alive 
      */
-    constructor(file, options = {}) {
+    constructor(file: string, options: ClusterManagerOptions = {}) {
         super();
         options = Util.mergeDefault(
             {
@@ -203,10 +254,10 @@ class ClusterManager extends EventEmitter {
         this.clusters = new Map();
         this.shardClusterList = null;
         process.env.SHARD_LIST = undefined;
-        process.env.TOTAL_SHARDS = this.totalShards;
+        process.env.TOTAL_SHARDS = this.totalShards.toString();
         process.env.CLUSTER = undefined;
-        process.env.CLUSTER_COUNT = this.totalClusters;
-        process.env.CLUSTER_MANAGER = true;
+        process.env.CLUSTER_COUNT = this.totalClusters.toString();
+        process.env.CLUSTER_MANAGER = "true";
         process.env.CLUSTER_MANAGER_MODE = this.mode;
         process.env.DISCORD_TOKEN = this.token;
         process.env.MAINTENANCE = undefined;
@@ -233,9 +284,9 @@ class ClusterManager extends EventEmitter {
      * @property {number} [delay=7000] How long to wait in between spawning each cluster (in milliseconds)
      * @property {number} [tTimeout=30000] The amount in milliseconds to wait until the {@link Client} has become ready
      * before resolving. (-1 or Infinity for no wait)
-     * @returns {Promise<Collection<number, Cluster>>}
+     * @returns {Promise<Map<number, Cluster>>}
      */
-    async spawn({ amount = this.totalShards, delay = 7000, timeout = -1 } = {}) {
+    async spawn({ amount = this.totalShards, delay = 7000, timeout = -1 } = {}): Promise<Map<number, Cluster>> {
         if (delay < 7000) {
             process.emitWarning(
                 `Spawn Delay (delay: ${delay}) is smaller than 7s, this can cause global rate limits on /gateway/bot`,
@@ -272,11 +323,15 @@ class ClusterManager extends EventEmitter {
             }
         }
 
+        if(typeof this.totalClusters !== "number") throw new Error('CLIENT_INVALID_OPTION | Total Clusters must be a number.');
+
         if (this.shardList === 'auto') this.shardList = [...Array(amount).keys()];
 
         //Calculate Shards per Cluster:
         if (this.shardsPerClusters) this.totalClusters = Math.ceil(this.shardList.length / this.shardsPerClusters);
 
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-ignore
         this.shardClusterList = this.shardList.chunk(Math.ceil(this.shardList.length / this.totalClusters));
         if (this.shardClusterList.length !== this.totalClusters) {
             this.totalClusters = this.shardClusterList.length;
@@ -293,7 +348,9 @@ class ClusterManager extends EventEmitter {
             const readyTimeout = timeout !== -1 ? timeout + delay * this.shardClusterList[i].length : timeout;
             const spawnDelay = delay * this.shardClusterList[i].length;
             this.queue.add({
-                run: (...a) => {
+                run: (...a: number[]) => {
+                    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+                    // @ts-ignore
                     const cluster = this.createCluster(clusterId, this.shardClusterList[i], this.totalShards);
                     return cluster.spawn(...a);
                 },
@@ -301,6 +358,7 @@ class ClusterManager extends EventEmitter {
                 timeout: spawnDelay,
             });
         }
+        // @ts-ignore
         return this.queue.start();
     }
 
@@ -309,10 +367,11 @@ class ClusterManager extends EventEmitter {
      * @param {*} message Message to be sent to the clusters
      * @returns {Promise<Cluster[]>}
      */
-    broadcast(message) {
+    async broadcast(message: unknown): Promise<Cluster[]> {
         const promises = [];
         for (const cluster of this.clusters.values()) promises.push(cluster.send(message));
-        return Promise.all(promises).then(e => e._result);
+        const e = await Promise.all(promises);
+        return e._result;
     }
     /**
      * Creates a single cluster.
@@ -321,11 +380,11 @@ class ClusterManager extends EventEmitter {
      * @param id
      * @param shardsToSpawn
      * @param totalShards
-     * @returns {CLUSTER} Note that the created cluster needs to be explicitly spawned using its spawn method.
+     * @returns {Cluster} Note that the created cluster needs to be explicitly spawned using its spawn method.
      */
-    createCluster(id, shardsToSpawn, totalShards, recluster = false) {
+    createCluster(id: number, shardsToSpawn: number[], totalShards: number, reCluster = false): Cluster {
         const cluster = new Cluster(this, id, shardsToSpawn, totalShards);
-        if(!recluster) this.clusters.set(id, cluster);
+        if(!reCluster) this.clusters.set(id, cluster);
         /**
          * Emitted upon creating a cluster.
          * @event ClusterManager#clusterCreate
@@ -343,7 +402,8 @@ class ClusterManager extends EventEmitter {
      * @param {Object} [options={}] The options for the broadcastEVal
      * @returns {Promise<*>|Promise<Array<*>>} Results of the script execution
      */
-    broadcastEval(script, options = {}) {
+    // eslint-disable-next-line @typescript-eslint/ban-types
+    broadcastEval(script: string | Function, options: BroadCastEvalOptions = {}): Promise<unknown> | Promise<Array<unknown>> {
         if (!script || (typeof script !== 'string' && typeof script !== 'function'))
             return Promise.reject(new TypeError('ClUSTERING_INVALID_EVAL_BROADCAST'));
         script = typeof script === 'function' ? `(${script})(this, ${JSON.stringify(options.context)})` : script;
@@ -357,6 +417,8 @@ class ClusterManager extends EventEmitter {
             }
         }
         if(options.guildId){
+
+            // @ts-ignore
             options.shard = Util.shardIdForGuildId(options.guildId, this.totalShards);
             console.log(options.shard);
         }
@@ -367,7 +429,7 @@ class ClusterManager extends EventEmitter {
             if(Array.isArray(options.shard)){
                 if(options.shard.length === 0) throw new RangeError('ARRAY_MUST_CONTAIN_ONE SHARD_ID');
             }
-            options.cluster = [...this.clusters.values()].find(c => c.shardId === options.shard);
+            options.cluster = [...this.clusters.values()].find(c => c.shardList.includes(options.shard)).id;
         }
         return this._performOnClusters('eval', [script], options.cluster, options.timeout);
     }
@@ -381,7 +443,7 @@ class ClusterManager extends EventEmitter {
      *   .then(results => console.log(`${results.reduce((prev, val) => prev + val, 0)} total guilds`))
      *   .catch(console.error);
      */
-    fetchClientValues(prop, cluster) {
+    fetchClientValues(prop: string, cluster: number) {
         return this.broadcastEval(`this.${prop}`, { cluster });
     }
 
@@ -394,10 +456,11 @@ class ClusterManager extends EventEmitter {
      * @returns {Promise<*>|Promise<Array<*>>} Results of the method execution
      * @private
      */
-    _performOnClusters(method, args, cluster, timeout) {
+    _performOnClusters(method: string, args: Array<unknown>, cluster: number | Array<unknown>, timeout: number): Promise<unknown> | Promise<Array<unknown>> {
         if (this.clusters.size === 0) return Promise.reject(new Error('CLUSTERING_NO_CLUSTERS'));
 
         if (typeof cluster === 'number') {
+            // @ts-ignore
             if (this.clusters.has(cluster)) return this.clusters.get(cluster)[method](...args, undefined, timeout);
             return Promise.reject(new Error('CLUSTERING_CLUSTER_NOT_FOUND FOR ClusterId: ' + cluster));
         }
@@ -408,6 +471,7 @@ class ClusterManager extends EventEmitter {
         /* if (this.clusters.size !== this.totalClusters && !cluster) return Promise.reject(new Error('CLUSTERING_IN_PROCESS')); */
 
         const promises = [];
+        // @ts-ignore
         for (const cl of clusters) promises.push(cl[method](...args, undefined, timeout));
         return Promise.all(promises);
     }
@@ -422,8 +486,9 @@ class ClusterManager extends EventEmitter {
         let s = 0;
         let i = 0;
         for (const cluster of [...this.clusters.values()]) {
-            const promises = [cluster.respawn({ delay: respawnDelay, timeout })];
+            const promises = [cluster.respawn({ clusterDelay: respawnDelay, timeout })];
             if (++s < this.clusters.size && clusterDelay > 0)
+                // @ts-ignore
                 promises.push(Util.delayFor(this.shardClusterList[i].length * clusterDelay));
             i++;
             await Promise.all(promises); // eslint-disable-line no-await-in-loop
@@ -440,14 +505,14 @@ class ClusterManager extends EventEmitter {
      * @returns {Promise<*>|Promise<Array<*>>} Results of the script execution
      * @private
      */
-    async evalOnManager(script) {
+    async evalOnManager(script: string | Function) {
         script = typeof script === 'function' ? `(${script})(this)` : script;
         let result;
-        let error;
+        let error: Error;
         try {
             result = await eval(script);
         } catch (err) {
-            error = err;
+            error = <Error>err;
         }
         return {_result: result, _error: error ? Util.makePlainError(error) : null};
     }
@@ -459,7 +524,8 @@ class ClusterManager extends EventEmitter {
      * @returns {Promise<*>|Promise<Array<*>>} Results of the script execution
      * @private
      */
-    evalOnCluster(script, options) {
+    // eslint-disable-next-line @typescript-eslint/ban-types
+    evalOnCluster(script: string | Function, options: object): Promise<unknown> | Promise<Array<unknown>> {
         return this.broadcastEval(script, options).then(r => r[0]);
     }
 
@@ -479,7 +545,7 @@ class ClusterManager extends EventEmitter {
     /**
     * @param {string} reason If maintenance should be enabled on all clusters with a given reason or disabled when nonce provided
     */
-    triggerMaintenance(reason) {
+    triggerMaintenance(reason: string) {
        return [...this.clusters.values()].forEach(cluster => cluster.triggerMaintenance(reason));
     }
     /**
@@ -490,7 +556,7 @@ class ClusterManager extends EventEmitter {
      * @param cluster
      * @returns {string} returns the log message
      */
-    _debug(message, cluster) {
+    _debug(message: string, cluster: undefined | number = undefined) {
         let log;
         if (cluster === undefined) {
             log = `[CM => Manager] ` + message;
@@ -506,12 +572,11 @@ class ClusterManager extends EventEmitter {
         return log;
     }
 }
-module.exports = ClusterManager;
 
 Object.defineProperty(Array.prototype, 'chunk', {
-    value: function (chunkSize) {
-        var R = [];
-        for (var i = 0; i < this.length; i += chunkSize) R.push(this.slice(i, i + chunkSize));
+    value: function (chunkSize: number) {
+        const R = [];
+        for (let i = 0; i < this.length; i += chunkSize) R.push(this.slice(i, i + chunkSize));
         return R;
     },
 });

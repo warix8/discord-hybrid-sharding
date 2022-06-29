@@ -1,16 +1,42 @@
+/* eslint-disable @typescript-eslint/ban-ts-comment */
 // @ts-check
-const EventEmitter = require('events');
-const path = require('path');
-const Util = require('../Util/Util.js');
+import EventEmitter from 'events';
+import path from 'path';
+import Util from '../Util/Util.js';
 
-const { messageType } = require('../Util/Constants.js');
-const { IPCMessage, BaseMessage } = require('../Structures/IPCMessage.js');
-const { ClusterHandler } = require('../Structures/IPCHandler.js');
+import { messageType } from '../Util/Constants.js';
+import { IPCMessage, BaseMessage, Message } from '../Structures/IPCMessage';
+import { ClusterHandler } from '../Structures/IPCHandler';
 
-const { Worker } = require('../Structures/Worker.js');
-const { Child } = require('../Structures/Child.js');
+import { Worker } from '../Structures/Worker';
+import { Child } from '../Structures/Child.js';
+import ClusterManager from './ClusterManager.js';
+import { Serializable } from 'child_process';
+import { Shard } from 'discord.js';
 
-let Thread = null;
+let Thread: typeof Child | typeof Worker = null;
+
+interface ClusterRespawnOptions {
+    clusterDelay?: number;
+    respawnDelay?: number;
+    timeout?: number;
+}
+
+interface Restarts {
+    current: number;
+    max: number;
+    interval: number;
+    reset?: NodeJS.Timer;
+    resetRestarts(): void;
+    cleanup(): void
+    append(): void
+}
+
+interface RequestMessage {
+    _sRequest: boolean;
+    _sReply: boolean;
+    _type: string;
+}
 
 /**
  * A self-contained cluster created by the {@link ClusterManager}. Each one has a {@link Child} that contains
@@ -18,14 +44,30 @@ let Thread = null;
  * spawn a new one to replace it as necessary.
  * @augments EventEmitter
  */
-class Cluster extends EventEmitter {
+export default class Cluster extends EventEmitter {
+    public args: string[];
+    public execArgv: string[];
+    public env: NodeJS.ProcessEnv;
+    public id: number;
+    public manager: ClusterManager;
+    public process: Child | null;
+    public ready: boolean;
+    public worker: Worker | null;
+    public heartbeat: object;
+
+    private _restarts: object;
+    shardList: number[];
+    totalShards: number;
+    thread: Worker | Child;
+    restarts: Restarts;
+    messageHandler: ClusterHandler;
     /**
      * @param {ClusterManager} manager Manager that is creating this cluster
      * @param {number} id ID of this cluster
      * @param shardList
      * @param totalShards
      */
-    constructor(manager, id, shardList, totalShards) {
+    constructor(manager: ClusterManager, id: number, shardList: number[], totalShards: number) {
         super();
         if (manager.mode === 'process') Thread = Child;
         else if (manager.mode === 'worker') Thread = Worker;
@@ -111,13 +153,23 @@ class Cluster extends EventEmitter {
      */
     async spawn(spawnTimeout = 30000) {
         if (this.thread) throw new Error('CLUSTER ALREADY SPAWNED | ClusterId: ' + this.id);
-        this.thread = new Thread(path.resolve(this.manager.file), {
-            ...this.manager.clusterOptions,
-            execArgv: this.execArgv,
-            env: this.env,
-            args: this.args,
-            clusterData: { ...this.env, ...this.manager.clusterData },
-        });
+        if(Thread instanceof Child) {
+            this.thread = new Child(path.resolve(this.manager.file), {
+                ...this.manager.clusterOptions,
+                execArgv: this.execArgv,
+                env: this.env,
+                args: this.args,
+                clusterData: { ...this.env, ...this.manager.clusterData },
+            });
+        } else {
+            this.thread = new Worker(path.resolve(this.manager.file), {
+                ...this.manager.clusterOptions,
+                execArgv: this.execArgv,
+                env: this.env,
+                // args: this.args,
+                clusterData: { ...this.env, ...this.manager.clusterData },
+            });
+        }
         this.messageHandler = new ClusterHandler(this.manager, this, this.thread);
 
         this.thread
@@ -135,7 +187,7 @@ class Cluster extends EventEmitter {
 
         if (spawnTimeout === -1 || spawnTimeout === Infinity) return this.thread.process;
 
-        await new Promise((resolve, reject) => {
+        await new Promise<void>((resolve, reject) => {
             const cleanup = () => {
                 clearTimeout(spawnTimeoutTimer);
                 this.off('ready', onReady);
@@ -171,9 +223,9 @@ class Cluster extends EventEmitter {
      * @param {object} options Some Options for managing the Kill
      * @param {object} options.force Whether the Cluster should be force kill and be ever respawned...
      */
-    kill(options = {}) {
-        this.thread.kill(options);
-        this.manager.heartbeat?.clusters.get(this.id)?.stop();
+    kill() {
+        this.thread.kill();
+        this.manager?.heartbeat?.clusters.get(this.id)?.stop();
         this.restarts.cleanup();
         this._handleExit(false);
     }
@@ -182,9 +234,9 @@ class Cluster extends EventEmitter {
      * @param {ClusterRespawnOptions} [options] Options for respawning the cluster
      * @returns {Promise<Child>}
      */
-    async respawn({ delay = 500, timeout = 30000 } = {}) {
-        if (this.thread) this.kill({ force: true });
-        if (delay > 0) await Util.delayFor(delay);
+    async respawn({ clusterDelay = 500, timeout = 30000 }: ClusterRespawnOptions = {}) {
+        if (this.thread) this.kill();
+        if (clusterDelay > 0) await Util.delayFor(clusterDelay);
         this.manager.heartbeat?.clusters.get(this.id)?.stop();
         return this.spawn(timeout);
     }
@@ -193,9 +245,9 @@ class Cluster extends EventEmitter {
      * @param {*|BaseMessage} message Message to send to the cluster
      * @returns {Promise<Shard>}
      */
-    send(message) {
+    send(message: Serializable | Message) {
         if (typeof message === 'object') message = new BaseMessage(message).toJSON();
-        return this.thread.send(message);
+        return this.thread.send(message) as Promise<Shard>;
     }
 
     /**
@@ -208,11 +260,12 @@ class Cluster extends EventEmitter {
      *   .catch(console.error);
      * @see {@link IPCMessage#reply}
      */
-    request(message = {}) {
+    request(message: RequestMessage) {
         message._sRequest = true;
         message._sReply = false;
         message._type = messageType.CUSTOM_REQUEST;
         this.send(message);
+        // @ts-ignore
         return this.manager.promise.create(message);
     }
     /**
@@ -222,7 +275,8 @@ class Cluster extends EventEmitter {
      * @param timeout
      * @returns {Promise<*>} Result of the script execution
      */
-    async eval(script, context, timeout) {
+    // eslint-disable-next-line @typescript-eslint/ban-types
+    async eval(script: string | Function, context: unknown, timeout: unknown): Promise<unknown> {
         // Stringify the script if it's a Function
         const _eval = typeof script === 'function' ? `(${script})(this, ${JSON.stringify(context)})` : script;
 
@@ -231,13 +285,14 @@ class Cluster extends EventEmitter {
         const nonce = Util.generateNonce();
         const message = {nonce, _eval, options: {timeout}, _type: messageType.CLIENT_EVAL_REQUEST};
         await this.send(message);
+        // @ts-ignore
         return await this.manager.promise.create(message);
     }
 
     /**
     * @param {string} reason If maintenance should be enabled with a given reason or disabled when nonce provided
     */
-    triggerMaintenance(reason) {
+    triggerMaintenance(reason: string) {
         const _type = reason ? messageType.CLIENT_MAINTENANCE_ENABLE : messageType.CLIENT_MAINTENANCE_DISABLE;
         return this.send({ _type, maintenance: reason });
     }
@@ -247,13 +302,17 @@ class Cluster extends EventEmitter {
      * @param {*} message Message received
      * @private
      */
-    _handleMessage(message) {
+    _handleMessage(message: IPCMessage | Message) {
         if (!message) return;
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-ignore
         const emit = this.messageHandler.handleMessage(message);
         if(!emit) return;
 
         let emitMessage;
         if (typeof message === 'object') {
+            // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-ignore
             emitMessage = new IPCMessage(this, message);
             if (emitMessage._sRequest) this.manager.emit('clientRequest', emitMessage);
         } else emitMessage = message;
@@ -270,7 +329,7 @@ class Cluster extends EventEmitter {
      * @param {boolean} [respawn=this.manager.respawn] Whether to spawn the cluster again
      * @private
      */
-    _handleExit(respawn = this.manager.respawn) {
+    _handleExit(respawn: boolean = this.manager.respawn) {
         /**
          * Emitted upon the cluster's child process/worker exiting.
          * @event Cluster#death
@@ -293,7 +352,7 @@ class Cluster extends EventEmitter {
      * @param {object} [error] the error, which occurred on the worker/child process
      * @private
      */
-    _handleError(error) {
+    _handleError(error: Error) {
         /**
          * Emitted upon the cluster's child process/worker error.
          * @event Cluster#error
@@ -302,5 +361,3 @@ class Cluster extends EventEmitter {
         this.manager.emit('error', error);
     }
 }
-
-module.exports = Cluster;

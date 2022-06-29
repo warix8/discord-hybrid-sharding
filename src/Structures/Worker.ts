@@ -1,7 +1,26 @@
-const Worker_Thread = require('worker_threads').Worker;
+import { Worker as Worker_Thread, parentPort, workerData, ResourceLimits, TransferListItem, SHARE_ENV } from 'worker_threads';
+
+interface WorkerOptions {
+    clusterData?: unknown;
+    workerData?: unknown;
+    argv?: unknown[] | undefined;
+    execArgv?: string[] | undefined;
+    env?: NodeJS.Dict<string> | typeof SHARE_ENV | undefined;
+    eval?: boolean | undefined;
+    stdin?: boolean | undefined;
+    stdout?: boolean | undefined;
+    stderr?: boolean | undefined;
+    trackUnmanagedFds?: boolean | undefined;
+    transferList?: TransferListItem[];
+    resourceLimits?: ResourceLimits | undefined;
+}
 
 class Worker {
-    constructor(file, options = {}) {
+    process: Worker_Thread;
+    workerOptions: WorkerOptions;
+    file: string;
+    
+    constructor(file: string, options: WorkerOptions = {}) {
         this.file = file;
         this.process = null;
 
@@ -36,7 +55,7 @@ class Worker {
         return this.process?.terminate();
     }
 
-    send(message) {
+    send(message: unknown) {
         return new Promise((resolve) => {
             this.process?.postMessage(message);
             resolve(this);
@@ -45,19 +64,22 @@ class Worker {
 }
 
 class WorkerClient {
+    ipc: Worker_Thread;
     constructor() {
-        this.ipc = require('worker_threads').parentPort;
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-ignore
+        this.ipc = parentPort;
     }
-    send(message) {
-        return new Promise((resolve) => {
+    send(message: unknown) {
+        return new Promise<void>((resolve) => {
             this.ipc?.postMessage(message);
             resolve();
         });
     }
 
     getData() {
-        return require('worker_threads').workerData;
+        return workerData;
     }
 }
 
-module.exports = { Worker, WorkerClient };
+export { Worker, WorkerClient };
